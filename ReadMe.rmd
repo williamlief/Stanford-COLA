@@ -1,0 +1,203 @@
+---
+title: "Cost of Living for GSE Grad Students"
+output:
+  github_document: default
+---
+
+```{r opts, include = FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+
+```{r setup, include = FALSE}
+
+library(tidyverse)
+
+
+df <- DataVersionControl::readRDS_vc("Data/col_data.rds") %>% 
+  filter(school_year != "2011_2012") %>% 
+  filter(item %in% c("Candidacy", "Pre_Candidacy") |
+           item %in% c("Single_2B_1B_2O", "Family_2B_1B") |
+           item %in% c("Student", "Spouse_Child") | 
+           item %in% c("Breakfast_25", "Lunch_25", "Dinner_25")) %>% 
+  mutate(school_year = as.factor(school_year), 
+         year = as.numeric(substr(school_year,6,9)),
+         group = if_else(group == "Insurance", "Health Insurance", group),
+         annual_amount = annual_amount / 1000)
+
+# Collapse meal plan to single item
+# df <- df %>% filter(group != "Meal_Plans") %>% 
+#   bind_rows(df %>% filter(group == "Meal_Plans") %>% 
+#               group_by(group, school_year, year) %>% 
+#               summarize(annual_amount = sum(annual_amount)) %>% 
+#               mutate(item = "All Meals"))
+
+
+cols <- c("Pre_Candidacy" = "#98DBC6", 
+          "Candidacy" = "#5BC8AC", 
+          "Housing" = "#E6D72A", 
+          "Health Insurance" = "#F18D9E")
+
+```
+
+# Project Overview
+
+This project documents cost of living for graduate students at the Stanford GSE. Data was collected using the Stanford website and the [wayback machine](http://web.archive.org). Data is collected in `raw/Stanford Cost of Living.xlsx`. PDFcopies of webpages referenced are available in `raw/documentation`.
+
+Current data available is:
+
+  - Student Stipend, 2011-12 and 2014-15 through 2019-20
+  - Meal Plans, 2017-18 through 2019-20
+  - Health Insurance, 2015-16 through 2019-20
+  - Housing 2015-16 through 2019-20
+
+# Sample Analysis
+
+This document summarizes data on the change in health insurance, and housing costs against the changes in the student stipend for GSE graduate students. I examine a single student and a family with one child. For the single student we assume the housing is a shared 2 bedroom, one bath unit. For the family we assume that the housing is also a 2 bedroom, 1 bath unit. For health insurance I include the full 50% subsidy and free summer quarter for the student, and the annualized monthly cost for a spouse and one child. The stipend is the annualized amount for three terms, and does not include any additional earnings from the summer quarter. All figures shown for the stipend are pre-tax. 
+
+
+## Nominal Costs over Time
+
+```{r nominal}
+
+single <- df %>% 
+  filter(item == "Student" | item == "Single_2B_1B_2O") %>% 
+  select(-item, school_year)
+  
+family <- df %>% 
+  filter(
+    group == "Health Insurance" | item == "Family_2B_1B"
+  ) %>% 
+  group_by(group, year) %>% 
+  summarize(annual_amount = sum(annual_amount))
+
+housing_insurance <-
+  bind_rows("Single Student" = single, "Family, 1 Child" = family, .id = "type") 
+
+stipend <- df %>% 
+  filter(group == "Stipend", year > 2015)
+
+
+ggplot(data = housing_insurance, aes(x = year, y = annual_amount)) +
+  geom_col(aes(fill = group), position = "stack") +
+  geom_line(data = stipend, 
+            aes(x = year, y = annual_amount, linetype = item),
+            size = 2) +
+  facet_wrap(type ~ .) +
+  labs(
+    title = "Stipend against Housing and Insurance",
+    y = "Nominal Dollars (Thousands)",
+    x = "Academic Year",
+    linetype = "Stipend",
+    fill = "Expense"
+  ) +
+  scale_fill_manual(values = cols)
+
+```
+
+## Costs as a Proportion of the Stipend
+
+```{r proportion}
+
+prop <- housing_insurance %>% 
+  left_join(stipend %>% 
+              filter(item == "Candidacy") %>% 
+              select(stipend = annual_amount, year),
+            by = "year") %>% 
+  mutate(pct_of_stipend = annual_amount / stipend)
+
+ggplot(data = prop, aes(x = year, y = pct_of_stipend)) +
+  geom_col(aes(fill = group), position = "stack") +
+  facet_wrap(type ~ .) +
+  labs(
+    title = "Housing and Insurance as a Proportion of Candidacy Stipend",
+    y = "Proportion of Stipend",
+    x = "Academic Year",
+    group = "Legend"
+  ) +
+  scale_fill_manual(values = cols)
+
+
+
+```
+
+
+## Annual Percent Change
+
+```{r change}
+
+ts_hi <- housing_insurance %>% 
+  arrange(type, group, year) %>% 
+  group_by(type, group) %>% 
+  mutate(pct_change = annual_amount / lag(annual_amount) - 1) %>% 
+  filter(year > 2016)
+
+ts_stipend <- stipend %>% 
+  arrange(item, group, year) %>% 
+  group_by(item, group) %>% 
+  mutate(pct_change = annual_amount / lag(annual_amount) - 1,
+         type = "Stipend") %>% 
+  filter(year > 2016) %>% 
+  rename(group = item)
+
+  
+ts <- bind_rows(
+  ts_hi, 
+  ts_stipend)
+
+ggplot(data = ts, aes(x = year, y = pct_change)) +
+  geom_col(aes(fill = group), position = "dodge", color = "black") +
+  facet_grid(.~type) +
+  scale_fill_manual(values = cols) +
+  labs(
+    title = "Change from Prior Year",
+    y = "Percent Change",
+    x = "Academic Year",
+    fill = ""
+  )
+
+
+
+```
+
+
+
+
+## Tables
+
+```{r tables}
+
+
+knitr::kable(housing_insurance %>% 
+               mutate(annual_amount = annual_amount * 1000) %>% 
+               select(group, type, Year = year, annual_amount) %>% 
+               pivot_wider(names_from = group, values_from = annual_amount),
+             digits = 0, 
+             caption = "Insurance and Housing Cost (Nominal Dollars)")
+
+
+knitr::kable(stipend %>% 
+               mutate(annual_amount = annual_amount * 1000) %>% 
+               select(item, Year = year, annual_amount) %>% 
+               pivot_wider(names_from = item, values_from = annual_amount),
+             digits = 0, 
+             caption = "Student Stipend (Nominal Dollars)")
+
+knitr::kable(prop %>% 
+               filter(type == "Single Student") %>% 
+               select(group, Year = year, pct_of_stipend) %>% 
+               pivot_wider(names_from = group, values_from = pct_of_stipend),
+             digits = 2, 
+             caption = "Costs as proportion of candidacy stipend, for a single student")
+
+knitr::kable(prop %>% 
+               filter(type == "Family, 1 Child") %>% 
+               select(group, Year = year, pct_of_stipend) %>% 
+               pivot_wider(names_from = group, values_from = pct_of_stipend),
+             digits = 2, 
+             caption = "Costs as proportion of candidacy stipend, for a family with 1 child")
+
+
+```
+
+
